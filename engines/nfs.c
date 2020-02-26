@@ -24,13 +24,6 @@
 
 struct rpc_context *mount_context;
 
-struct client {
-       char *server;
-       char *export;
-       uint32_t mount_port;
-       struct nfsfh *nfsfh;
-};
-
 enum nfs_op_type {
 	NFS_READ_WRITE = 0,
 	NFS_STAT_MKDIR_RMDIR,
@@ -46,8 +39,7 @@ enum nfs_op_type {
 struct fio_skeleton_options {
 	struct nfsfh *nfsfh;
 	struct nfs_context *context;	
-	char *nfs_server;
-	char *nfs_export;
+	char *nfs_url;
 	enum nfs_op_type op_type;
 	int (*read)(struct fio_skeleton_options *o, struct io_u *io_u);
 	int (*write)(struct fio_skeleton_options *o, struct io_u *io_u);
@@ -58,32 +50,20 @@ struct fio_skeleton_options {
 	int buffered_event_count; // IOs completed by libnfs faiting for FIO
 	int free_event_buffer_index; // next empty buffer
 	unsigned int queue_depth; // nfs_callback needs this info, but doesn't have fio td structure to pull it from
-	struct io_u* events[0];
+	struct io_u**events;
 };
 
 static struct fio_option options[] = {
 	{
-		.name     = "nfs_server",
-		.lname    = "nfs_server",
+		.name     = "nfs_url",
+		.lname    = "nfs_url",
 		.type     = FIO_OPT_STR_STORE,
-		.help	= "NFS server hostname",
-		.off1     = offsetof(struct fio_skeleton_options, nfs_server),
+		.help	= "libnfs url, of format nfs://<server|ipv4|ipv6>/path[?arg=val[&arg=val]*]",
+		.off1     = offsetof(struct fio_skeleton_options, nfs_url),
 		.def	  = "localhost",
 		.category = FIO_OPT_C_ENGINE,
 		.group	= __FIO_OPT_G_NFS,
-	},
-	{
-		.name	= "hostname",
-		.lname	= "net engine hostname",
-		.type	= FIO_OPT_STR_STORE,
-		.help	= "NFS export",
-		.off1     = offsetof(struct fio_skeleton_options, nfs_export),
-		.category = FIO_OPT_C_ENGINE,
-		.group	= __FIO_OPT_G_NFS,
-	},
-	{
-		.name     = NULL,
-	},
+	}
 };
 
 
@@ -356,21 +336,20 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 {
 	struct nfs_context *nfs;
 	int ret;
-	struct client client;
-	unsigned long option_size;
-	struct fio_skeleton_options *options;
-	DEBUG_PRINT("fio_skeleton_open(%s) eo=%p td->o.iodepth=%d\n", f->file_name,
-		td->eo, td->o.iodepth);
+	unsigned long event_size;
+	struct nfs_url *nfs_url;
+	struct fio_skeleton_options *options = td->eo;
+	DEBUG_PRINT("fio_skeleton_open(%s) eo=%p td->o.iodepth=%d nfs_url=%s\n", f->file_name,
+		td->eo, td->o.iodepth, options->nfs_url);
 
-	client.server = getenv("NFS_SERVER");
-	client.export = getenv("NFS_EXPORT");
-	if (!client.server || !client.export) {
-		FAIL("Must set env vars: NFS_SERVER, NFS_EXPORT\n");
+	if (!options->nfs_url) {
+		FAIL("Must set config vars: nfs_url\n");
 	}
 
-	option_size = sizeof(struct fio_skeleton_options) + sizeof(struct io_u **) * td->o.iodepth;
-	options = malloc(option_size);
-	memset(options, 0, option_size);
+	event_size = sizeof(struct io_u **) * td->o.iodepth;
+	options->events = malloc(event_size);
+
+	memset(options, 0, event_size);
 	options->prev_requested_event_index = -1;
 	options->queue_depth = td->o.iodepth;
 
@@ -379,11 +358,13 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 		FAIL("failed to init nfs context\n");
 	}
 
-	ret = nfs_mount(nfs, client.server, client.export);
-	DEBUG_PRINT("nfsmount(%s, %s)\n",  client.server, client.export);
+	nfs_url = nfs_parse_url_full(nfs, options->nfs_url);
+	ret = nfs_mount(nfs, nfs_url->server, nfs_url->file);
+	DEBUG_PRINT("nfsmount(%s, %s)\n", nfs_url->server, nfs_url->file);
 	if (ret != 0) {
-		FAIL("Failed to start async nfs mount\n");
+		FAIL("Failed to nfs mount %s:%s\n", nfs_url->server, nfs_url->file);
 	}
+	nfs_destroy_url(nfs_url);
 	if (strstr(f->file_name, "stat_mkdir_rmdir")) {
 		DEBUG_PRINT("stat_touch_rm");
 		options->read = queue_stat;
@@ -428,7 +409,6 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 	}
 	f->fd = nfs_get_fd(nfs);
 	f->engine_data = options;
-	td->eo = options;
 	return ret;
 }
 
@@ -454,8 +434,7 @@ static int fio_skeleton_close(struct thread_data *td, struct fio_file *f)
 	}
 	nfs_umount(o->context);
 	nfs_destroy_context(o->context);
-	free(o);
-	td->eo = NULL;
+	free(o->events);
 	f->fd = -1;
 	return ret;
 }

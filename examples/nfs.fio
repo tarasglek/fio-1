@@ -1,0 +1,12 @@
+[global]
+nfs_url=nfs://localhost//nfs
+ioengine=nfs
+rw=write; or randread
+iodepth=1
+size=100
+bs=1
+numjobs=1
+group_reporting
+;rate_iops=####
+
+[file]
