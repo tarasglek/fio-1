@@ -71,6 +71,12 @@ ifdef CONFIG_LIBNBD
   SOURCE += engines/nbd.c
 endif
 
+ifdef CONFIG_LIBNFS
+  CFLAGS += $(LIBNFS_CFLAGS)
+  LIBS += $(LIBNFS_LIBS)
+  SOURCE += engines/nfs.c
+endif
+
 ifdef CONFIG_64BIT
   CFLAGS += -DBITS_PER_LONG=64
 endif

@@ -151,6 +151,7 @@ march_set="no"
 libiscsi="no"
 libnbd="no"
 libaio_uring="no"
+libnfs="yes"
 prefix=/usr/local
 
 # parse options
@@ -214,6 +215,8 @@ for opt do
   --disable-tcmalloc) disable_tcmalloc="yes"
   ;;
   --enable-libaio-uring) libaio_uring="yes"
+  ;;
+  --enable-libnfs) libnfs="yes"
   ;;
   --help)
     show_help="yes"
@@ -2173,6 +2176,22 @@ fi
 print_config "NBD engine" "$libnbd"
 
 ##########################################
+# Check if we have libnfs (for nfs support).
+if test "$libnfs" = "yes" ; then
+  if $(pkg-config libnfs); then
+    libnfs="yes"
+    libnfs_cflags=$(pkg-config --cflags libnfs)
+    libnfs_libs=$(pkg-config --libs libnfs)
+  else
+    if test "$libnfs" = "yes" ; then
+      echo "libnfs" "Install libnfs"
+    fi
+    libnfs="no"
+  fi
+fi
+print_config "nfs engine" "$libnfs"
+
+##########################################
 # Check if we have lex/yacc available
 yacc="no"
 yacc_is_bison="no"
@@ -2860,6 +2879,12 @@ if test "$libnbd" = "yes" ; then
   echo "CONFIG_LIBNBD=m" >> $config_host_mak
   echo "LIBNBD_CFLAGS=$libnbd_cflags" >> $config_host_mak
   echo "LIBNBD_LIBS=$libnbd_libs" >> $config_host_mak
+fi
+if test "$libnfs" = "yes" ; then
+  output_sym "CONFIG_LIBNFS"
+  echo "CONFIG_LIBNFS=m" >> $config_host_mak
+  echo "LIBNFS_CFLAGS=$libnfs_cflags" >> $config_host_mak
+  echo "LIBNFS_LIBS=$libnfs_libs" >> $config_host_mak
 fi
 cat > $TMPC << EOF
 int main(int argc, char **argv)
