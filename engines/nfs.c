@@ -348,6 +348,7 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 
 	event_size = sizeof(struct io_u **) * td->o.iodepth;
 	options->events = malloc(event_size);
+	memset(options->events, 0, event_size);
 
 	memset(options, 0, event_size);
 	options->prev_requested_event_index = -1;
@@ -432,7 +433,7 @@ static int fio_skeleton_close(struct thread_data *td, struct fio_file *f)
 		ret = nfs_close(o->context, o->nfsfh);
 		ret = generic_close_file(td, f);
 	}
-	nfs_umount(o->context);
+	//nfs_umount(o->context);
 	nfs_destroy_context(o->context);
 	free(o->events);
 	f->fd = -1;
