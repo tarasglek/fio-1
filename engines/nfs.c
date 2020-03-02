@@ -1,6 +1,6 @@
 #include <poll.h>
 
-#if 0
+#if 1
 #define DEBUG_PRINT(...) \
 	fprintf(stderr, __VA_ARGS__)
 
@@ -40,6 +40,9 @@ struct fio_skeleton_options {
 	struct nfsfh *nfsfh;
 	struct nfs_context *context;	
 	char *nfs_url;
+	char *nfs_read;
+	char *nfs_write;
+	char *nfs_trim;
 	enum nfs_op_type op_type;
 	int (*read)(struct fio_skeleton_options *o, struct io_u *io_u);
 	int (*write)(struct fio_skeleton_options *o, struct io_u *io_u);
@@ -63,7 +66,37 @@ static struct fio_option options[] = {
 		.def	  = "localhost",
 		.category = FIO_OPT_C_ENGINE,
 		.group	= __FIO_OPT_G_NFS,
-	}
+	},
+	{
+		.name     = "nfs_write",
+		.lname    = "nfs_write",
+		.type     = FIO_OPT_STR_STORE,
+		.help	= "one of write,mkdir,touch",
+		.off1     = offsetof(struct fio_skeleton_options, nfs_write),
+		.def	  = "write",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= __FIO_OPT_G_NFS,
+	},
+	{
+		.name     = "nfs_read",
+		.lname    = "nfs_read",
+		.type     = FIO_OPT_STR_STORE,
+		.help	= "one of read, readdir, stat",
+		.off1     = offsetof(struct fio_skeleton_options, nfs_read),
+		.def	  = "read",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= __FIO_OPT_G_NFS,
+	},
+	{
+		.name     = "nfs_trim",
+		.lname    = "nfs_trim",
+		.type     = FIO_OPT_STR_STORE,
+		.help	= "One of rmdir, rm",
+		.off1     = offsetof(struct fio_skeleton_options, nfs_trim),
+		.def	  = "rmdir",
+		.category = FIO_OPT_C_ENGINE,
+		.group	= __FIO_OPT_G_NFS,
+	},
 };
 
 
@@ -339,8 +372,8 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 	unsigned long event_size;
 	struct nfs_url *nfs_url;
 	struct fio_skeleton_options *options = td->eo;
-	DEBUG_PRINT("fio_skeleton_open(%s) eo=%p td->o.iodepth=%d nfs_url=%s\n", f->file_name,
-		td->eo, td->o.iodepth, options->nfs_url);
+	DEBUG_PRINT("fio_skeleton_open(%s) eo=%p td->o.iodepth=%d nfs_url=%s nfs_write=%s nfs_read=%s nfs_trim=%s\n", f->file_name,
+		td->eo, td->o.iodepth, options->nfs_url, options->nfs_write, options->nfs_read, options->nfs_trim);
 
 	if (!options->nfs_url) {
 		FAIL("Must set config vars: nfs_url\n");
