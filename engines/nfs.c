@@ -24,12 +24,6 @@
 
 struct rpc_context *mount_context;
 
-enum nfs_op_type {
-	NFS_READ_WRITE = 0,
-	NFS_STAT_MKDIR_RMDIR,
-	NFS_STAT_TOUCH_RM,
-};
-
 /*
  * The io engine can define its own options within the io engine source.
  * The option member must not be at offset 0, due to the way fio parses
@@ -43,7 +37,6 @@ struct fio_skeleton_options {
 	char *nfs_read;
 	char *nfs_write;
 	char *nfs_trim;
-	enum nfs_op_type op_type;
 	int (*read)(struct fio_skeleton_options *o, struct io_u *io_u);
 	int (*write)(struct fio_skeleton_options *o, struct io_u *io_u);
 	int (*trim)(struct fio_skeleton_options *o, struct io_u *io_u);
@@ -81,7 +74,7 @@ static struct fio_option options[] = {
 		.name     = "nfs_read",
 		.lname    = "nfs_read",
 		.type     = FIO_OPT_STR_STORE,
-		.help	= "one of read, readdir, stat",
+		.help	= "one of read, stat",
 		.off1     = offsetof(struct fio_skeleton_options, nfs_read),
 		.def	  = "read",
 		.category = FIO_OPT_C_ENGINE,
@@ -188,34 +181,7 @@ static int fio_skeleton_cancel(struct thread_data *td, struct io_u *io_u)
 	return 0;
 }
 
-static void nfs_callback(int res, struct nfs_context *nfs, void *data,
-                       void *private_data)
-{
-	struct io_u *io_u = private_data;
-	struct fio_skeleton_options *o = io_u->file->engine_data;
-	DEBUG_PRINT("nfs_cb@%llu=%d io_u=%p\n", io_u->offset, res, io_u);
-	if (res == -2 /*NFS3ERR_NOENT*/ && io_u->ddir == DDIR_TRIM) {
-		DEBUG_PRINT("Ignorning: %s\n", nfs_get_error(o->context));
-		res = 0;
-	}
-	if (res < 0) {
-		FAIL("Failed NFS operation: %s\n", nfs_get_error(o->context));
-	}
-	if (io_u->ddir == DDIR_READ && o->op_type == NFS_READ_WRITE) {
-		memcpy(io_u->buf, data, res);
-		if (res == 0) {
-			FAIL("Got EOF, this is probably not expected\n");
-		}
-	}
-	// I guess fio uses resid to track remaining data
-	io_u->resid =  o->op_type == NFS_READ_WRITE ? (io_u->xfer_buflen - res) : 0;
-
-	assert(!o->events[o->free_event_buffer_index]);
-	o->events[o->free_event_buffer_index] = io_u;
-	o->free_event_buffer_index = (o->free_event_buffer_index + 1) % o->queue_depth;
-	o->outstanding_events--;
-	o->buffered_event_count++;
-}
+static void nfs_callback(int res, struct nfs_context *nfs, void *data, void *private_data);
 
 static int queue_write(struct fio_skeleton_options *o, struct io_u *io_u) {
 	return nfs_pwrite_async(o->context, o->nfsfh,
@@ -271,6 +237,40 @@ static int queue_rm(struct fio_skeleton_options *o, struct io_u *io_u) {
 }
 
 #undef NFS_FILENAME
+
+static void nfs_callback(int res, struct nfs_context *nfs, void *data,
+                       void *private_data)
+{
+	struct io_u *io_u = private_data;
+	struct fio_skeleton_options *o = io_u->file->engine_data;
+	DEBUG_PRINT("nfs_cb@%llu=%d io_u=%p\n", io_u->offset, res, io_u);
+	if (res == -2 /*NFS3ERR_NOENT*/ && io_u->ddir == DDIR_TRIM) {
+		DEBUG_PRINT("Ignorning: %s\n", nfs_get_error(o->context));
+		res = 0;
+	}
+	if (res < 0) {
+		FAIL("Failed NFS operation: %s\n", nfs_get_error(o->context));
+	}
+	if (io_u->ddir == DDIR_READ && o->read == queue_read) {
+		memcpy(io_u->buf, data, res);
+		if (res == 0) {
+			FAIL("Got EOF, this is probably not expected\n");
+		}
+	}
+	// I guess fio uses resid to track remaining data
+	if ((io_u->ddir == DDIR_READ && o->read == queue_read)
+		|| (io_u->ddir == DDIR_WRITE && o->write == queue_write)) {
+		io_u->resid = io_u->xfer_buflen - res;
+	} else {
+		io_u->resid = 0;
+	}
+
+	assert(!o->events[o->free_event_buffer_index]);
+	o->events[o->free_event_buffer_index] = io_u;
+	o->free_event_buffer_index = (o->free_event_buffer_index + 1) % o->queue_depth;
+	o->outstanding_events--;
+	o->buffered_event_count++;
+}
 /*
  * The ->queue() hook is responsible for initiating io on the io_u
  * being passed in. If the io engine is a synchronous one, io may complete
@@ -296,7 +296,7 @@ static enum fio_q_status fio_skeleton_queue(struct thread_data *td,
 		case DDIR_WRITE:
 			err = o->write(o, io_u);
 			// hack, proper fix is to add fio_q_status to every callback so they could specify if sync/async behavior
-			if (o->op_type == NFS_STAT_TOUCH_RM)
+			if (o->write == sync_touch)
 				ret = FIO_Q_COMPLETED;
 			break;
 		case DDIR_READ:
@@ -399,32 +399,39 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 		FAIL("Failed to nfs mount %s:%s\n", nfs_url->server, nfs_url->file);
 	}
 	nfs_destroy_url(nfs_url);
-	if (strstr(f->file_name, "stat_mkdir_rmdir")) {
-		DEBUG_PRINT("stat_touch_rm");
-		options->read = queue_stat;
+	if (!strcmp(options->nfs_write, "write")) {
+		options->write = queue_write;
+	} else if (!strcmp(options->nfs_write, "mkdir")) {
 		options->write = queue_mkdir;
-		options->trim = queue_rmdir;
-		options->op_type = NFS_STAT_MKDIR_RMDIR;
-		if (td->o.td_ddir == TD_DDIR_WRITE) {
-			ret = nfs_mkdir(nfs, f->file_name);
-			if (ret != 0) {
-				FAIL("Failed to mkdir: %s\n", nfs_get_error(nfs));
-			}
-		}
-	} else if (strstr(f->file_name, "stat_touch_rm")) {
-		DEBUG_PRINT("stat_touch_rm");
-		options->read = queue_stat;
+	} else if (!strcmp(options->nfs_write, "touch")) {
 		options->write = sync_touch;
-		options->trim = queue_rm;
-		options->op_type = NFS_STAT_TOUCH_RM;
-		if (td->o.td_ddir == TD_DDIR_WRITE) {
-			ret = nfs_mkdir(nfs, f->file_name);
-			if (ret != 0) {
-				FAIL("Failed to mkdir: %s\n", nfs_get_error(nfs));
-			}
-		}
 	} else {
+		log_err("Invalid value for 'nfs_write'skeleton_opeskeleton_ope: '%s'", options->nfs_write);
+		return 1;
+	}
+
+	if (!strcmp(options->nfs_read, "read")) {
+		options->read = queue_read;
+	} else if (!strcmp(options->nfs_read, "stat")) {
+		options->read = queue_stat;
+	} else {
+		log_err("Invalid value for 'nfs_read': '%s'", options->nfs_read);
+		return 1;
+	}
+
+	if (!strcmp(options->nfs_trim, "rm")) {
+		options->trim = queue_rm;
+	} else if (!strcmp(options->nfs_trim, "rmdir")) {
+		options->trim = queue_rmdir;
+	} else {
+		log_err("Invalid value for 'nfs_trim': '%s'", options->nfs_trim);
+		return 1;
+	}
+
+
+	if (options->read == queue_read || options->write == queue_write) {
 		int flags = 0;
+		DEBUG_PRINT("options->nfs_read == queue_read || options->nfs_write == queue_write)\n");
 		if (td->o.td_ddir == TD_DDIR_WRITE) {
 			DEBUG_PRINT("O_CREAT\n");
 			flags |= O_CREAT | O_RDWR;
@@ -437,9 +444,6 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 		if (ret != 0) {
 			FAIL("Failed to open nfs file: %s\n", nfs_get_error(nfs));
 		}
-		options->read = queue_read;
-		options->write = queue_write;
-		options->op_type = NFS_READ_WRITE;
 	}
 	f->fd = nfs_get_fd(nfs);
 	f->engine_data = options;
@@ -454,14 +458,6 @@ static int fio_skeleton_close(struct thread_data *td, struct fio_file *f)
 	struct fio_skeleton_options *o = td->eo;
 	int ret = 0;
 	DEBUG_PRINT("fio_skeleton_close\n");
-	if (td->o.td_ddir == TD_DDIR_TRIM) {
-		if (o->op_type == NFS_STAT_MKDIR_RMDIR || o->op_type == NFS_STAT_TOUCH_RM) {
-			ret = nfs_rmdir(o->context, f->file_name);
-			if (ret != 0) {
-				FAIL("Failed to rmdir: %s\n", nfs_get_error(o->context));
-			}
-		}
-	}
 	if (o->nfsfh) {
 		ret = nfs_close(o->context, o->nfsfh);
 		ret = generic_close_file(td, f);
