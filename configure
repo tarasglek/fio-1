@@ -2181,7 +2181,8 @@ if test "$libnfs" = "yes" ; then
   if $(pkg-config libnfs); then
     libnfs="yes"
     libnfs_cflags=$(pkg-config --cflags libnfs)
-    libnfs_libs=$(pkg-config --libs libnfs)
+    # libnfs_libs=$(pkg-config --libs libnfs)
+    libnfs_libs=/usr/local/lib/libnfs.a
   else
     if test "$libnfs" = "yes" ; then
       echo "libnfs" "Install libnfs"
