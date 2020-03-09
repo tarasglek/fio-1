@@ -373,6 +373,8 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 	unsigned long event_size;
 	struct nfs_url *nfs_url;
 	struct fio_skeleton_options *options = td->eo;
+	char *mnt_dir = NULL;
+	size_t path_len = 0;
 	DEBUG_PRINT("fio_skeleton_open(%s) eo=%p td->o.iodepth=%d nfs_url=%s nfs_write=%s nfs_read=%s nfs_trim=%s\n", f->file_name,
 		td->eo, td->o.iodepth, options->nfs_url, options->nfs_write, options->nfs_read, options->nfs_trim);
 
@@ -394,10 +396,15 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 	}
 
 	nfs_url = nfs_parse_url_full(nfs, options->nfs_url);
-	ret = nfs_mount(nfs, nfs_url->server, nfs_url->file);
-	DEBUG_PRINT("nfsmount(%s, %s)\n", nfs_url->server, nfs_url->file);
+	path_len = strlen(nfs_url->path);
+	mnt_dir = malloc(path_len + strlen(nfs_url->file) + 1);
+	strcpy(mnt_dir, nfs_url->path);
+	strcpy(mnt_dir + strlen(nfs_url->path), nfs_url->file);
+	DEBUG_PRINT("nfsmount(%s, %s)\n", nfs_url->server, mnt_dir);
+	ret = nfs_mount(nfs, nfs_url->server, mnt_dir);
+	free(mnt_dir);
 	if (ret != 0) {
-		FAIL("Failed to nfs mount %s:%s\n", nfs_url->server, nfs_url->file);
+		FAIL("Failed to nfs mount %s%s on %s: %s\n", nfs_url->path, nfs_url->file, nfs_url->server, nfs_get_error(nfs));
 	}
 	nfs_destroy_url(nfs_url);
 	if (strstr(f->file_name, "stat_mkdir_rmdir")) {
