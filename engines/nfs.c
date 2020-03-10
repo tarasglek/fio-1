@@ -1,7 +1,7 @@
 // https://github.com/axboe/fio/pull/762 sample pull req for new engine
 #include <poll.h>
 
-#if 0
+#if 1
 #define DEBUG_PRINT(...) \
 	fprintf(stderr, __VA_ARGS__)
 
@@ -332,16 +332,52 @@ static enum fio_q_status fio_skeleton_queue(struct thread_data *td,
 // 	return 0;
 // }
 
+/** Do a mount if one has not been done before */
+static int do_mount(struct thread_data *td, const char *url)
+{
+	size_t event_size = sizeof(struct io_u **) * td->o.iodepth;
+	struct fio_skeleton_options *options = td->eo;
+	struct nfs_url *nfs_url = NULL;
+	int ret = 0;
+	int path_len = 0;
+	char *mnt_dir = NULL;
+
+	if (options->context) {
+		return 0;
+	}
+
+	options->context = nfs_init_context();
+	if (options->context == NULL) {
+		FAIL("failed to init nfs context\n");
+	}
+
+	options->events = malloc(event_size);
+	memset(options->events, 0, event_size);
+
+	options->prev_requested_event_index = -1;
+	options->queue_depth = td->o.iodepth;
+	
+	nfs_url = nfs_parse_url_full(options->context, url);
+	path_len = strlen(nfs_url->path);
+	mnt_dir = malloc(path_len + strlen(nfs_url->file) + 1);
+	strcpy(mnt_dir, nfs_url->path);
+	strcpy(mnt_dir + strlen(nfs_url->path), nfs_url->file);
+	DEBUG_PRINT("nfs_mount(%s, %s)\n", nfs_url->server, mnt_dir);
+	ret = nfs_mount(options->context, nfs_url->server, mnt_dir);
+	free(mnt_dir);
+	nfs_destroy_url(nfs_url);
+	return ret;
+}
 /*
  * The init function is called once per thread/process, and should set up
  * any structures that this io engine requires to keep track of io. Not
  * required.
  */
-// static int fio_skeleton_init(struct thread_data *td)
-// {
-// 	DEBUG_PRINT("fio_skeleton_init %p\n", td->eo);
-// 	return 0;
-// }
+static int fio_skeleton_init(struct thread_data *td)
+{
+	DEBUG_PRINT("fio_skeleton_init %p\n", td->eo);
+	return 0;
+}
 
 /*
  * The init function is called once per thread/process, and should set up
@@ -350,9 +386,8 @@ static enum fio_q_status fio_skeleton_queue(struct thread_data *td,
  */
 static int fio_skeleton_setup(struct thread_data *td)
 {
-
 	DEBUG_PRINT("fio_skeleton_setup td=%p eo=%p \n", td, td->eo);
-	td->o.use_thread = 0;
+	td->o.use_thread = 0; // useful for debugging, but doesn't terminate
 	return 0;
 }
 /*
@@ -360,10 +395,14 @@ static int fio_skeleton_setup(struct thread_data *td)
  * done doing io. Should tear down anything setup by the ->init() function.
  * Not required.
  */
-// static void fio_skeleton_cleanup(struct thread_data *td)
-// {
-// 	DEBUG_PRINT("fio_skeleton_cleanup\n");
-// }
+static void fio_skeleton_cleanup(struct thread_data *td)
+{
+	struct fio_skeleton_options *o = td->eo;
+	DEBUG_PRINT("fio_skeleton_cleanup\n");
+	nfs_umount(o->context);
+	nfs_destroy_context(o->context);
+	free(o->events);
+}
 
 /*
  * Hook for opening the given file. Unless the engine has special
@@ -371,13 +410,8 @@ static int fio_skeleton_setup(struct thread_data *td)
  */
 static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 {
-	struct nfs_context *nfs;
 	int ret;
-	unsigned long event_size;
-	struct nfs_url *nfs_url;
 	struct fio_skeleton_options *options = td->eo;
-	char *mnt_dir = NULL;
-	size_t path_len = 0;
 	DEBUG_PRINT("fio_skeleton_open(%s) eo=%p td->o.iodepth=%d nfs_url=%s nfs_write=%s nfs_read=%s nfs_trim=%s\n", f->file_name,
 		td->eo, td->o.iodepth, options->nfs_url, options->nfs_write, options->nfs_read, options->nfs_trim);
 
@@ -385,31 +419,11 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 		FAIL("Must set config vars: nfs_url\n");
 	}
 
-	event_size = sizeof(struct io_u **) * td->o.iodepth;
-	options->events = malloc(event_size);
-	memset(options->events, 0, event_size);
-
-	memset(options, 0, event_size);
-	options->prev_requested_event_index = -1;
-	options->queue_depth = td->o.iodepth;
-
-	options->context = nfs = nfs_init_context();
-	if (nfs == NULL) {
-		FAIL("failed to init nfs context\n");
-	}
-
-	nfs_url = nfs_parse_url_full(nfs, options->nfs_url);
-	path_len = strlen(nfs_url->path);
-	mnt_dir = malloc(path_len + strlen(nfs_url->file) + 1);
-	strcpy(mnt_dir, nfs_url->path);
-	strcpy(mnt_dir + strlen(nfs_url->path), nfs_url->file);
-	DEBUG_PRINT("nfsmount(%s, %s)\n", nfs_url->server, mnt_dir);
-	ret = nfs_mount(nfs, nfs_url->server, mnt_dir);
-	free(mnt_dir);
+	ret = do_mount(td, options->nfs_url);
+	
 	if (ret != 0) {
-		FAIL("Failed to nfs mount %s%s on %s: %s\n", nfs_url->path, nfs_url->file, nfs_url->server, nfs_get_error(nfs));
+		FAIL("Failed to nfs mount %s with code %d: %s\n", options->nfs_url, ret, nfs_get_error(options->context));
 	}
-	nfs_destroy_url(nfs_url);
 	if (strstr(f->file_name, "stat_mkdir_rmdir")) {
 		DEBUG_PRINT("stat_touch_rm");
 		options->read = queue_stat;
@@ -417,9 +431,9 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 		options->trim = queue_rmdir;
 		options->op_type = NFS_STAT_MKDIR_RMDIR;
 		if (td->o.td_ddir == TD_DDIR_WRITE) {
-			ret = nfs_mkdir(nfs, f->file_name);
+			ret = nfs_mkdir(options->context, f->file_name);
 			if (ret != 0) {
-				FAIL("Failed to mkdir: %s\n", nfs_get_error(nfs));
+				FAIL("Failed to mkdir: %s\n", nfs_get_error(options->context));
 			}
 		}
 	} else if (strstr(f->file_name, "stat_touch_rm")) {
@@ -429,9 +443,9 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 		options->trim = queue_rm;
 		options->op_type = NFS_STAT_TOUCH_RM;
 		if (td->o.td_ddir == TD_DDIR_WRITE) {
-			ret = nfs_mkdir(nfs, f->file_name);
+			ret = nfs_mkdir(options->context, f->file_name);
 			if (ret != 0) {
-				FAIL("Failed to mkdir: %s\n", nfs_get_error(nfs));
+				FAIL("Failed to mkdir: %s\n", nfs_get_error(options->context));
 			}
 		}
 	} else {
@@ -444,15 +458,15 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 
 			flags |= O_RDWR;
 		}
-		ret = nfs_open(nfs, f->file_name, flags, &options->nfsfh);
+		ret = nfs_open(options->context, f->file_name, flags, &options->nfsfh);
 		if (ret != 0) {
-			FAIL("Failed to open nfs file: %s\n", nfs_get_error(nfs));
+			FAIL("Failed to open nfs file: %s\n", nfs_get_error(options->context));
 		}
 		options->read = queue_read;
 		options->write = queue_write;
 		options->op_type = NFS_READ_WRITE;
 	}
-	f->fd = nfs_get_fd(nfs);
+	f->fd = nfs_get_fd(options->context);
 	f->engine_data = options;
 	return ret;
 }
@@ -464,7 +478,7 @@ static int fio_skeleton_close(struct thread_data *td, struct fio_file *f)
 {
 	struct fio_skeleton_options *o = td->eo;
 	int ret = 0;
-	DEBUG_PRINT("fio_skeleton_close\n");
+	DEBUG_PRINT("fio_skeleton_close: f=%p nfsfh=%p\n", f, o->nfsfh);
 	if (td->o.td_ddir == TD_DDIR_TRIM) {
 		if (o->op_type == NFS_STAT_MKDIR_RMDIR || o->op_type == NFS_STAT_TOUCH_RM) {
 			ret = nfs_rmdir(o->context, f->file_name);
@@ -477,16 +491,8 @@ static int fio_skeleton_close(struct thread_data *td, struct fio_file *f)
 		ret = nfs_close(o->context, o->nfsfh);
 		ret = generic_close_file(td, f);
 	}
-	//nfs_umount(o->context);
-	nfs_destroy_context(o->context);
-	free(o->events);
 	f->fd = -1;
 	return ret;
-}
-
-static int fio_skeleton_init(struct thread_data *td) {
-	DEBUG_PRINT("fio_skeleton_init td->eo:%p\n", td->eo);
-	return 0;
 }
 
 /*
@@ -512,7 +518,7 @@ struct ioengine_ops ioengine = {
 	.cancel		= fio_skeleton_cancel,
 	.getevents	= fio_skeleton_getevents,
 	.event		= fio_skeleton_event,
-	// .cleanup	= fio_skeleton_cleanup,
+	.cleanup	= fio_skeleton_cleanup,
 	.open_file	= fio_skeleton_open,
 	.close_file	= fio_skeleton_close,
 	.commit     = fio_skeleton_commit,
