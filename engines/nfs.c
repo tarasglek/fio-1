@@ -1,7 +1,7 @@
 // https://github.com/axboe/fio/pull/762 sample pull req for new engine
 #include <poll.h>
 
-#if 1
+#if 0
 #define DEBUG_PRINT(...) \
 	fprintf(stderr, __VA_ARGS__)
 
@@ -97,6 +97,9 @@ static struct fio_option options[] = {
 		.def	  = "rmdir",
 		.category = FIO_OPT_C_ENGINE,
 		.group	= __FIO_OPT_G_NFS,
+	},
+	{
+		.name     = NULL,
 	},
 };
 
