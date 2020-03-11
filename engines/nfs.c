@@ -38,7 +38,6 @@ enum nfs_op_type {
  * something usable.
  */
 struct fio_skeleton_options {
-	struct nfsfh *nfsfh;
 	struct nfs_context *context;	
 	char *nfs_url;
 	char *nfs_read;
@@ -55,6 +54,11 @@ struct fio_skeleton_options {
 	int free_event_buffer_index; // next empty buffer
 	unsigned int queue_depth; // nfs_callback needs this info, but doesn't have fio td structure to pull it from
 	struct io_u**events;
+};
+
+struct nfs_data {
+	struct nfsfh *nfsfh;
+	struct fio_skeleton_options *options;
 };
 
 static struct fio_option options[] = {
@@ -196,7 +200,8 @@ static void nfs_callback(int res, struct nfs_context *nfs, void *data,
                        void *private_data)
 {
 	struct io_u *io_u = private_data;
-	struct fio_skeleton_options *o = io_u->file->engine_data;
+	struct nfs_data *nfs_data = io_u->file->engine_data;
+	struct fio_skeleton_options *o = nfs_data->options;
 	DEBUG_PRINT("nfs_cb@%llu=%d io_u=%p\n", io_u->offset, res, io_u);
 	if (res == -2 /*NFS3ERR_NOENT*/ && io_u->ddir == DDIR_TRIM) {
 		DEBUG_PRINT("Ignorning: %s\n", nfs_get_error(o->context));
@@ -222,13 +227,15 @@ static void nfs_callback(int res, struct nfs_context *nfs, void *data,
 }
 
 static int queue_write(struct fio_skeleton_options *o, struct io_u *io_u) {
-	return nfs_pwrite_async(o->context, o->nfsfh,
+	struct nfs_data *nfs_data = io_u->engine_data;
+	return nfs_pwrite_async(o->context, nfs_data->nfsfh,
                            io_u->offset, io_u->buflen, io_u->buf, nfs_callback,
                            io_u);
 }
 
 static int queue_read(struct fio_skeleton_options *o, struct io_u *io_u) {
-	return nfs_pread_async(o->context, o->nfsfh, io_u->offset, io_u->buflen, nfs_callback,  io_u);
+	struct nfs_data *nfs_data = io_u->engine_data;
+	return nfs_pread_async(o->context,  nfs_data->nfsfh, io_u->offset, io_u->buflen, nfs_callback,  io_u);
 }
 
 // todo: reverse numbers to improve name distribution
@@ -288,14 +295,16 @@ static int queue_rm(struct fio_skeleton_options *o, struct io_u *io_u) {
 static enum fio_q_status fio_skeleton_queue(struct thread_data *td,
 					    struct io_u *io_u)
 {
-	struct nfs_context *nfs = (struct nfs_context *)io_u->file->engine_data;
-	struct fio_skeleton_options *o = td->eo;
+	struct nfs_data *nfs_data = io_u->file->engine_data;
+	struct fio_skeleton_options *o = nfs_data->options;
+	struct nfs_context *nfs = o->context;
 	int err;
 	enum fio_q_status ret = FIO_Q_QUEUED;
 	DEBUG_PRINT("fio_skeleton_queue %s @%llu size:%llu\n",
 		(io_u->ddir == DDIR_READ ? "read" : "write"),
 		io_u->offset, io_u->buflen);
 
+	io_u->engine_data = nfs_data;
 	switch(io_u->ddir) {
 		case DDIR_WRITE:
 			err = o->write(o, io_u);
@@ -412,6 +421,7 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 {
 	int ret;
 	struct fio_skeleton_options *options = td->eo;
+	struct nfs_data *nfs_data = NULL;
 	DEBUG_PRINT("fio_skeleton_open(%s) eo=%p td->o.iodepth=%d nfs_url=%s nfs_write=%s nfs_read=%s nfs_trim=%s\n", f->file_name,
 		td->eo, td->o.iodepth, options->nfs_url, options->nfs_write, options->nfs_read, options->nfs_trim);
 
@@ -424,6 +434,10 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 	if (ret != 0) {
 		FAIL("Failed to nfs mount %s with code %d: %s\n", options->nfs_url, ret, nfs_get_error(options->context));
 	}
+	nfs_data = malloc(sizeof(struct nfs_data));
+	memset(nfs_data, 0, sizeof(struct nfs_data));
+	nfs_data->options = options;
+
 	if (strstr(f->file_name, "stat_mkdir_rmdir")) {
 		DEBUG_PRINT("stat_touch_rm");
 		options->read = queue_stat;
@@ -458,7 +472,9 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 
 			flags |= O_RDWR;
 		}
-		ret = nfs_open(options->context, f->file_name, flags, &options->nfsfh);
+		ret = nfs_open(options->context, f->file_name, flags, &nfs_data->nfsfh);
+		DEBUG_PRINT("fio_skeleton_open f=%p nfsfh=%p\n", f, nfs_data->nfsfh);
+
 		if (ret != 0) {
 			FAIL("Failed to open nfs file: %s\n", nfs_get_error(options->context));
 		}
@@ -466,8 +482,8 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 		options->write = queue_write;
 		options->op_type = NFS_READ_WRITE;
 	}
+	f->engine_data = nfs_data;
 	f->fd = nfs_get_fd(options->context);
-	f->engine_data = options;
 	return ret;
 }
 
@@ -476,9 +492,10 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
  */
 static int fio_skeleton_close(struct thread_data *td, struct fio_file *f)
 {
-	struct fio_skeleton_options *o = td->eo;
+	struct nfs_data *nfs_data = f->engine_data;
+	struct fio_skeleton_options *o = nfs_data->options;
 	int ret = 0;
-	DEBUG_PRINT("fio_skeleton_close: f=%p nfsfh=%p\n", f, o->nfsfh);
+	DEBUG_PRINT("fio_skeleton_close: f=%p nfsfh=%p\n", f, nfs_data->nfsfh);
 	if (td->o.td_ddir == TD_DDIR_TRIM) {
 		if (o->op_type == NFS_STAT_MKDIR_RMDIR || o->op_type == NFS_STAT_TOUCH_RM) {
 			ret = nfs_rmdir(o->context, f->file_name);
@@ -487,10 +504,12 @@ static int fio_skeleton_close(struct thread_data *td, struct fio_file *f)
 			}
 		}
 	}
-	if (o->nfsfh) {
-		ret = nfs_close(o->context, o->nfsfh);
+	if (nfs_data->nfsfh) {
+		ret = nfs_close(o->context, nfs_data->nfsfh);
 		ret = generic_close_file(td, f);
 	}
+	free(nfs_data);
+	f->engine_data = NULL;
 	f->fd = -1;
 	return ret;
 }
