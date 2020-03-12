@@ -10,8 +10,8 @@
 #endif
 
 #define FAIL(...) { \
-	fprintf(stderr, __VA_ARGS__); \
-	exit(1); \
+	log_err(__VA_ARGS__); \
+	return 1; \
 }
 
 #include <stdlib.h>
@@ -208,12 +208,14 @@ static void nfs_callback(int res, struct nfs_context *nfs, void *data,
 		res = 0;
 	}
 	if (res < 0) {
-		FAIL("Failed NFS operation: %s\n", nfs_get_error(o->context));
-	}
-	if (io_u->ddir == DDIR_READ && o->op_type == NFS_READ_WRITE) {
+		log_err("Failed NFS operation(code:%d): %s\n", res, nfs_get_error(o->context));
+		io_u->error = -res;
+		// res is used for read math below, don't wanna mass negative there
+		res = 0;
+	} else if (io_u->ddir == DDIR_READ && o->op_type == NFS_READ_WRITE) {
 		memcpy(io_u->buf, data, res);
 		if (res == 0) {
-			FAIL("Got EOF, this is probably not expected\n");
+			log_err("Got NFS EOF, this is probably not expected\n");
 		}
 	}
 	// I guess fio uses resid to track remaining data
@@ -483,7 +485,6 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 		options->op_type = NFS_READ_WRITE;
 	}
 	f->engine_data = nfs_data;
-	f->fd = nfs_get_fd(options->context);
 	return ret;
 }
 
@@ -506,11 +507,9 @@ static int fio_skeleton_close(struct thread_data *td, struct fio_file *f)
 	}
 	if (nfs_data->nfsfh) {
 		ret = nfs_close(o->context, nfs_data->nfsfh);
-		ret = generic_close_file(td, f);
 	}
 	free(nfs_data);
 	f->engine_data = NULL;
-	f->fd = -1;
 	return ret;
 }
 
