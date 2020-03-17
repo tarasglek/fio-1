@@ -68,7 +68,6 @@ static struct fio_option options[] = {
 		.type     = FIO_OPT_STR_STORE,
 		.help	= "libnfs url, of format nfs://<server|ipv4|ipv6>/path[?arg=val[&arg=val]*]",
 		.off1     = offsetof(struct fio_skeleton_options, nfs_url),
-		.def	  = "localhost",
 		.category = FIO_OPT_C_ENGINE,
 		.group	= __FIO_OPT_G_NFS,
 	},
