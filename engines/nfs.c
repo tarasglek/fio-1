@@ -1,7 +1,7 @@
 // https://github.com/axboe/fio/pull/762 sample pull req for new engine
 #include <poll.h>
 
-#if 1
+#if 0
 #define DEBUG_PRINT(...) \
 	fprintf(stderr, __VA_ARGS__)
 
