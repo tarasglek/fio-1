@@ -5,8 +5,8 @@
 #define DEBUG_PRINT(...) \
 	fprintf(stderr, __VA_ARGS__)
 
-#else 
-#define DEBUG_PRINT(...) 
+#else
+#define DEBUG_PRINT(...)
 #endif
 
 #define FAIL(...) { \
@@ -38,7 +38,7 @@ enum nfs_op_type {
  * something usable.
  */
 struct fio_skeleton_options {
-	struct nfs_context *context;	
+	struct nfs_context *context;
 	char *nfs_url;
 	char *nfs_read;
 	char *nfs_write;
@@ -49,7 +49,7 @@ struct fio_skeleton_options {
 	int (*trim)(struct fio_skeleton_options *o, struct io_u *io_u);
 	int outstanding_events; // IOs issued to libnfs, that have not returned yet
 	int prev_requested_event_index; // event last returned via fio_skeleton_event
-	int next_buffered_event; // round robin-pointer within events[] 
+	int next_buffered_event; // round robin-pointer within events[]
 	int buffered_event_count; // IOs completed by libnfs faiting for FIO
 	int free_event_buffer_index; // next empty buffer
 	unsigned int queue_depth; // nfs_callback needs this info, but doesn't have fio td structure to pull it from
@@ -107,6 +107,10 @@ static struct fio_option options[] = {
 };
 
 
+static void nfs_callback(int res, struct nfs_context *nfs, void *data,
+                       void *private_data);
+
+
 /*
  * The ->event() hook is called to match an event number with an io_u.
  * After the core has called ->getevents() and it has returned eg 3,
@@ -147,12 +151,12 @@ static int nfs_event_loop(struct thread_data *td, bool flush) {
 		DEBUG_PRINT("why bother me?\n");
 		return o->buffered_event_count;
 	}
-	
+
 
 #define SHOULD_WAIT() (o->outstanding_events == td->o.iodepth || (flush && o->outstanding_events))
-	
+
 	do {
-		int timeout = SHOULD_WAIT() ? -1 : 0;
+		int timeout = SHOULD_WAIT() ? 60000 : 0;
 		int ret = 0;
 		pfds[0].fd = nfs_get_fd(o->context);
 		pfds[0].events = nfs_which_events(o->context);
@@ -165,6 +169,22 @@ static int nfs_event_loop(struct thread_data *td, bool flush) {
 
 		if (nfs_service(o->context, pfds[0].revents) < 0) {
 			FAIL("nfs_service failed\n");
+		}
+
+		if (timeout != 0 && ret == 0){
+			log_err("Error: Timed out waiting for io events\n");
+			log_err("poll(timeout=%d)=%d full=%d outstanding=%d flush=%d\n",
+				timeout, ret, o->outstanding_events == td->o.iodepth,  o->outstanding_events, flush);
+			log_err("fd: %d\n", pfds[0].fd);
+			log_err("printing file information:\n");
+			char err_cmd[100];
+			sprintf(err_cmd, "lsof -a -i -p %d", getpid());
+			system(err_cmd);
+
+			// Call nfs_callback to record an error from each outstanding connection
+			// -62 is ETIME, timer expired which is the most relevant for this failure
+			nfs_callback(-62, o->context, NULL, (void*) o->events[o->next_buffered_event]);
+			return 1;
 		}
 	} while (SHOULD_WAIT());
 	DEBUG_PRINT("-nfs_event_loop %d\n", o->buffered_event_count);
@@ -191,7 +211,7 @@ static int fio_skeleton_getevents(struct thread_data *td, unsigned int min,
 static int fio_skeleton_cancel(struct thread_data *td, struct io_u *io_u)
 {
 	DEBUG_PRINT("fio_skeleton_cancel\n");
-	
+
 	return 0;
 }
 
@@ -366,7 +386,7 @@ static int do_mount(struct thread_data *td, const char *url)
 
 	options->prev_requested_event_index = -1;
 	options->queue_depth = td->o.iodepth;
-	
+
 	nfs_url = nfs_parse_url_full(options->context, url);
 	path_len = strlen(nfs_url->path);
 	mnt_dir = malloc(path_len + strlen(nfs_url->file) + 1);
@@ -431,7 +451,7 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 	}
 
 	ret = do_mount(td, options->nfs_url);
-	
+
 	if (ret != 0) {
 		FAIL("Failed to nfs mount %s with code %d: %s\n", options->nfs_url, ret, nfs_get_error(options->context));
 	}
