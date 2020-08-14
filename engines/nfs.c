@@ -156,7 +156,8 @@ static int nfs_event_loop(struct thread_data *td, bool flush) {
 #define SHOULD_WAIT() (o->outstanding_events == td->o.iodepth || (flush && o->outstanding_events))
 
 	do {
-		int timeout = SHOULD_WAIT() ? 60000 : 0;
+		//td->o.timeout is in microseconds, but poll uses miliseconds
+		int timeout = SHOULD_WAIT() ? (td->o.timeout / 1000) : 0;
 		int ret = 0;
 		pfds[0].fd = nfs_get_fd(o->context);
 		pfds[0].events = nfs_which_events(o->context);
