@@ -1751,8 +1751,8 @@ int main(int argc, char **argv)
 }
 EOF
 if test "$disable_http" != "yes"; then
-  HTTP_LIBS="-lcurl -lssl -lcrypto"
-  if compile_prog "" "$HTTP_LIBS" "curl-new-ssl"; then
+  HTTP_LIBS="`curl-config --static-libs` -ldl"
+   if compile_prog "" "$HTTP_LIBS" "curl-new-ssl"; then
     output_sym "CONFIG_HAVE_OPAQUE_HMAC_CTX"
     http="yes"
     LIBS="$HTTP_LIBS $LIBS"
@@ -2181,8 +2181,8 @@ if test "$libnfs" = "yes" ; then
   if $(pkg-config libnfs); then
     libnfs="yes"
     libnfs_cflags=$(pkg-config --cflags libnfs)
-    # libnfs_libs=$(pkg-config --libs libnfs)
-    libnfs_libs=/usr/local/lib/libnfs.a
+    libnfs_libs=$(pkg-config --libs libnfs)
+    # libnfs_libs=/usr/local/lib/libnfs.a
   else
     if test "$libnfs" = "yes" ; then
       echo "libnfs" "Install libnfs"
