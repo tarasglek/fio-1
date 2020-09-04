@@ -622,7 +622,7 @@ static int fio_http_setup(struct thread_data *td)
 	td->io_ops_data = http;
 
 	/* Force single process mode. */
-	td->o.use_thread = 1;
+	td->o.use_thread = 0;
 
 	return 0;
 cleanup:
