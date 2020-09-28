@@ -2,7 +2,7 @@
 # (cd docker && docker build -f Dockerfile . -t fio-builder) && docker run -ti -v `pwd`:/root/fio fio-builder bash ./package.sh
 FROM ubuntu:18.04
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y build-essential  upx  libssl-dev autoconf libtool git wget pkg-config
+RUN apt-get update && apt-get install -y build-essential  upx  libssl-dev autoconf libtool git wget pkg-config libaio-dev
 # librtmp-dev libssh-dev libpsl-dev libldap2-dev libbrotli-dev libkrb5-dev tcpdump less  libnghttp2-dev
 
 # libnfs-dev
