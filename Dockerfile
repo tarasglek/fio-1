@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y build-essential  upx  libssl-dev autoco
 
 # libnfs-dev
 WORKDIR /src
-RUN git clone https://github.com/sahlberg/libnfs
+RUN git clone -b taras/static-build https://github.com/tarasglek/libnfs/
 RUN cd libnfs && ./bootstrap && ./configure --prefix=/usr && make -j && make install
 RUN apt-get remove --purge -y libcurl*
 RUN wget https://curl.haxx.se/download/curl-7.66.0.tar.gz && \
