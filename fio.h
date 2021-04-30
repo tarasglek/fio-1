@@ -593,6 +593,7 @@ extern void td_fill_rand_seeds(struct thread_data *);
 extern void td_fill_verify_state_seed(struct thread_data *);
 extern void add_job_opts(const char **, int);
 extern int ioengine_load(struct thread_data *);
+extern char *make_filename(char *buf, size_t buf_size, const char* filename_format, const char *jobname, int jobnum, int filenum);
 extern bool parse_dryrun(void);
 extern int fio_running_or_pending_io_threads(void);
 extern int fio_set_fd_nonblocking(int, const char *);

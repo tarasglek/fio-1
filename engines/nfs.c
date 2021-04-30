@@ -388,7 +388,8 @@ static int do_mount(struct thread_data *td, const char *url)
 	options->prev_requested_event_index = -1;
 	options->queue_depth = td->o.iodepth;
 
-	nfs_url = nfs_parse_url_full(options->context, url);
+	char myurl[PATH_MAX];
+	nfs_url = nfs_parse_url_full(options->context, make_filename(myurl, PATH_MAX, url, "some_nfs_job", td->subjob_number, 0));
 	path_len = strlen(nfs_url->path);
 	mnt_dir = malloc(path_len + strlen(nfs_url->file) + 1);
 	strcpy(mnt_dir, nfs_url->path);
