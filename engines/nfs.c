@@ -396,6 +396,9 @@ static int do_mount(struct thread_data *td, const char *url)
 	strcpy(mnt_dir + strlen(nfs_url->path), nfs_url->file);
 	DEBUG_PRINT("nfs_mount(%s, %s)\n", nfs_url->server, mnt_dir);
 	ret = nfs_mount(options->context, nfs_url->server, mnt_dir);
+	if (ret != 0) {
+		log_err("Failed to nfs mount %s with code %d: %s\n", myurl, ret, nfs_get_error(options->context));
+	}
 	free(mnt_dir);
 	nfs_destroy_url(nfs_url);
 	return ret;
@@ -455,7 +458,7 @@ static int fio_skeleton_open(struct thread_data *td, struct fio_file *f)
 	ret = do_mount(td, options->nfs_url);
 
 	if (ret != 0) {
-		FAIL("Failed to nfs mount %s with code %d: %s\n", options->nfs_url, ret, nfs_get_error(options->context));
+		return ret;
 	}
 	nfs_data = malloc(sizeof(struct nfs_data));
 	memset(nfs_data, 0, sizeof(struct nfs_data));
